@@ -1,208 +1,458 @@
-import re
-import string
-from collections import Counter
-
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Phishing Email Detection",
-                    page_icon="📧", 
-                    layout="wide")
 
-#TBD will be replaced with actual model final values
-MODEL_METRICS = {  
+# ==================================================
+# Page configuration
+# ==================================================
+
+st.set_page_config(
+    page_title="Phishing Email Detection",
+    page_icon="📧",
+    layout="wide",
+)
+
+
+# ==================================================
+# Final evaluation metrics
+# ==================================================
+
+MODEL_METRICS = {
     "Logistic Regression": {
-        "Accuracy": "TBD",
-        "Precision": "TBD",
-        "Recall": "TBD",
-        "F1 Score": "TBD"
-    },
-    "Multinomial Naive Bayes": {
-        "Accuracy": "TBD",
-        "Precision": "TBD",
-        "Recall": "TBD",
-        "F1 Score": "TBD"
+        "Accuracy": 0.9928,
+        "Precision": 0.9944,
+        "Recall": 0.9931,
+        "F1 Score": 0.9938,
+        "Rank": 1,
+        "Status": "🏆 Best Overall",
     },
     "BERT": {
-        "Accuracy": "TBD",
-        "Precision": "TBD",
-        "Recall": "TBD",
-        "F1 Score": "TBD"
-    }
+        "Accuracy": 0.9800,
+        "Precision": 0.9900,
+        "Recall": 0.9900,
+        "F1 Score": 0.9900,
+        "Rank": 2,
+        "Status": "⭐ Excellent",
+    },
+    "Multinomial Naive Bayes": {
+        "Accuracy": 0.7469,
+        "Precision": 0.6987,
+        "Recall": 0.7513,
+        "F1 Score": 0.7240,
+        "Rank": 3,
+        "Status": "Baseline",
+    },
 }
 
-FEATURE_COLUMNS = [
-    "body_length",
-    "email_length",
-    "sender_domain_length",
-    "subject_length",
-    "punctuation_count",
-    "word_frequency"
-]
 
-def get_sender_domain(sender: str) -> str:
-    """Extract the domain from the sender's email address."""
-    if "@" not in sender:
-        return ""
-    return sender.rsplit("@", 1)[1].strip().lower()
+# ==================================================
+# Cached model loaders
+# ==================================================
 
-def calculate_word_frequency(text: str) -> float:
-    """
-    Calculate how frequently the most common word appears.
+@st.cache_resource
+def load_logistic_predictor():
+    from logistic_predictor import LogisticPredictor
 
-    Example:
-    'verify your account verify now'
-    Most common word: verify
-    Frequency: 2 / 5 = 0.40
+    predictor = LogisticPredictor()
+    predictor.load()
+    return predictor
 
-    This definition must be checked against the model notebooks.
-    """
-    words = re.findall(r"\b[a-zA-Z]+\b", text.lower())
 
-    if not words:
-        return 0.0
+@st.cache_resource
+def load_naive_bayes_predictor():
+    from naive_bayes_predictor import NaiveBayesPredictor
 
-    word_counts = Counter(words)
-    most_common_count = word_counts.most_common(1)[0][1]
+    predictor = NaiveBayesPredictor()
+    predictor.load()
+    return predictor
 
-    return most_common_count / len(words)
 
-def calculate_features(
+@st.cache_resource
+def load_bert_predictor():
+    from bert_predictor import BertPredictor
+
+    predictor = BertPredictor()
+    predictor.load()
+    return predictor
+
+
+# ==================================================
+# Helper functions
+# ==================================================
+
+def format_percentage(value: float) -> str:
+    """Convert a decimal metric into a percentage string."""
+    return f"{value:.2%}"
+
+
+def run_selected_model(
+    selected_model: str,
     sender: str,
     receiver: str,
     subject: str,
     body: str,
+    attachment_count: int,
 ) -> dict:
-    """Calculate engineered features from the submitted email address."""
+    """Load and run the model selected by the user."""
 
-    sender = sender.strip()
-    receiver = receiver.strip()
-    subject = subject.strip()
-    body = body.strip()
+    if selected_model == "Logistic Regression":
+        predictor = load_logistic_predictor()
 
-    sender_domain = get_sender_domain(sender)
-    combined_text = f"{subject} {body}".strip()
-
-    features = {
-        "body_length": len(body),
-
-        # Confirm this definition with the notebooks.
-        "email_length": len(subject) + len(body),
-
-        "sender_domain_length": len(sender_domain),
-
-        "subject_length": len(subject),
-
-        # Counts punctuation in the subject and body.
-        "punctuation_count": sum(
-            character in string.punctuation
-            for character in combined_text
-        ),
-
-        # Confirm this definition with the notebooks.
-        "word_frequency": round(
-            calculate_word_frequency(combined_text),
-            4
+        return predictor.predict(
+            sender=sender,
+            receiver=receiver,
+            subject=subject,
+            body=body,
+            attachment_count=attachment_count,
         )
-    }
 
-    return {
-        column: features[column]
-        for column in FEATURE_COLUMNS
-    }
+    if selected_model == "Multinomial Naive Bayes":
+        predictor = load_naive_bayes_predictor()
+
+        return predictor.predict(
+            sender=sender,
+            subject=subject,
+            body=body,
+            attachment_count=attachment_count,
+        )
+
+    predictor = load_bert_predictor()
+
+    return predictor.predict(
+        subject=subject,
+        body=body,
+    )
+
+
+def create_leaderboard() -> pd.DataFrame:
+    """Create the final model leaderboard."""
+
+    leaderboard_rows = []
+
+    for model_name, metrics in MODEL_METRICS.items():
+        leaderboard_rows.append(
+            {
+                "Rank": metrics["Rank"],
+                "Model": model_name,
+                "Accuracy": format_percentage(
+                    metrics["Accuracy"]
+                ),
+                "Precision": format_percentage(
+                    metrics["Precision"]
+                ),
+                "Recall": format_percentage(
+                    metrics["Recall"]
+                ),
+                "F1 Score": format_percentage(
+                    metrics["F1 Score"]
+                ),
+                "Result": metrics["Status"],
+            }
+        )
+
+    return (
+        pd.DataFrame(leaderboard_rows)
+        .sort_values("Rank")
+        .reset_index(drop=True)
+    )
+
+
+# ==================================================
+# Header
+# ==================================================
 
 st.title("📧 Phishing Email Detection")
 
 st.write(
-    "Select a model and enter an email to classify it as phishing or legitimate."
+    "Compare three machine-learning models and use the selected "
+    "model to classify an email as phishing or legitimate."
 )
 
 st.markdown(
-    "**Dataset:** [Hugging Face - Phishing Email Dataset](https://huggingface.co/datasets/simlab-vs/meajor_cleaned_preprocessed)  \n"
+    "**Dataset:** "
+    "[Hugging Face – Phishing Email Dataset]"
+    "(https://huggingface.co/datasets/"
+    "simlab-vs/meajor_cleaned_preprocessed)"
 )
 
 st.divider()
 
-#Model dashboard
+
+# ==================================================
+# Model dashboard
+# ==================================================
+
 st.subheader("Model Dashboard")
 
 selected_model = st.selectbox(
-    "Select a model to view its metrics.",
-    list(MODEL_METRICS.keys())
+    "Select a model",
+    [
+        "Logistic Regression",
+        "BERT",
+        "Multinomial Naive Bayes",
+    ],
 )
 
 selected_metrics = MODEL_METRICS[selected_model]
 
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("Accuracy", selected_metrics["Accuracy"])
-col2.metric("Precision", selected_metrics["Precision"])
-col3.metric("Recall", selected_metrics["Recall"])
-col4.metric("F1 Score", selected_metrics["F1 Score"])
-
-st.caption("Replace TBD values after corrected models are evaluated")
-
-# Best performing model summary
-st.markdown("### Best Performing Model")
-
-best_model = "TBD"
-
-st.info(
-    f"Based on the final evaluation metrics, **{best_model}** will be shown "
-    "here as the best-performing model."
+metric_col1, metric_col2, metric_col3, metric_col4 = (
+    st.columns(4)
 )
 
-st.write(
-    "The best model will be selected by comparing accuracy, precision, "
-    "recall, and F1 score across all evaluated models."
+metric_col1.metric(
+    "Accuracy",
+    format_percentage(selected_metrics["Accuracy"]),
 )
+
+metric_col2.metric(
+    "Precision",
+    format_percentage(selected_metrics["Precision"]),
+)
+
+metric_col3.metric(
+    "Recall",
+    format_percentage(selected_metrics["Recall"]),
+)
+
+metric_col4.metric(
+    "F1 Score",
+    format_percentage(selected_metrics["F1 Score"]),
+)
+
+if selected_metrics["Rank"] == 1:
+    st.success(
+        f"{selected_metrics['Status']}: "
+        f"{selected_model} achieved the strongest overall results."
+    )
+else:
+    st.info(
+        f"Current ranking: #{selected_metrics['Rank']} — "
+        f"{selected_metrics['Status']}"
+    )
 
 st.divider()
 
+
+# ==================================================
 # Email form
+# ==================================================
+
 st.subheader("Analyze an Email")
 
+st.write(
+    "A demo phishing-style email is provided below. "
+    "You can analyze it immediately or replace it with your own email."
+)
+
 with st.form(key="email_form"):
-    sender = st.text_input("Sender Email", 
-                        placeholder="sender@example.com")
-    receiver = st.text_input("Receiver Email",
-                        placeholder="receiver@example.com")
-    subject = st.text_input("Subject",
-                        placeholder="Enter the email's subject here")
-    body = st.text_area("Email Body", 
-                        placeholder="Enter the email's body here",
-                        height=220)
-    
-    submitted = st.form_submit_button("Analyze Email", 
-                                      type = "primary", 
-                                      use_container_width=True)
+
+    sender = st.text_input(
+        "Sender Email",
+        value="security@account-verification.com",
+    )
+
+    receiver = st.text_input(
+        "Receiver Email",
+        value="student@example.com",
+    )
+
+    subject = st.text_input(
+        "Subject",
+        value="Urgent: Verify your account immediately",
+    )
+
+    body = st.text_area(
+        "Email Body",
+        value=(
+            "Your account has been suspended. "
+            "Click the link below to verify your information "
+            "immediately.\n\n"
+            "https://login.account-verification.com/verify"
+        ),
+        height=240,
+    )
+
+    attachment_count = st.number_input(
+        "Number of Attachments",
+        min_value=0,
+        value=0,
+        step=1,
+    )
+
+    submitted = st.form_submit_button(
+        "Analyze Email",
+        type="primary",
+        use_container_width=True,
+    )
+
+
+# ==================================================
+# Prediction
+# ==================================================
 
 if submitted:
-    if not sender:
-        st.warning("Please enter the sender's email address.")
+
+    if not sender.strip():
+        st.warning(
+            "Please enter the sender's email address."
+        )
 
     elif "@" not in sender:
-        st.warning("Please enter a valid sender email address.")
+        st.warning(
+            "Please enter a valid sender email address."
+        )
 
-    elif not subject and not body:
-        st.warning("Please enter either the email's subject or body.")
+    elif receiver.strip() and "@" not in receiver:
+        st.warning(
+            "Please enter a valid receiver email address."
+        )
+
+    elif not subject.strip() and not body.strip():
+        st.warning(
+            "Please enter either the email subject or body."
+        )
 
     else:
-        features = calculate_features(
-            sender=sender,
-            receiver=receiver,
-            subject=subject,
-            body=body
-        )
+        try:
+            with st.spinner(
+                f"Loading and running {selected_model}..."
+            ):
+                result = run_selected_model(
+                    selected_model=selected_model,
+                    sender=sender,
+                    receiver=receiver,
+                    subject=subject,
+                    body=body,
+                    attachment_count=int(
+                        attachment_count
+                    ),
+                )
 
-        st.success("Email features calculated successfully!")
+            st.divider()
+            st.subheader("Prediction Result")
 
-        st.subheader("Engineered Features")
-        st.dataframe(pd.DataFrame([features]),
-                     hide_index=True, 
-                     use_container_width=True)
+            if result["is_phishing"]:
+                st.error(
+                    "⚠️ This email was classified as phishing."
+                )
+            else:
+                st.success(
+                    "✅ This email was classified as legitimate."
+                )
 
-        st.info(
-            f"{selected_model} is selected. "
-            "Prediction will be added after the model is connected."
-        )
+            result_col1, result_col2, result_col3 = (
+                st.columns(3)
+            )
+
+            result_col1.metric(
+                "Model",
+                selected_model,
+            )
+
+            result_col2.metric(
+                "Prediction",
+                result["label"],
+            )
+
+            result_col3.metric(
+                "Confidence",
+                format_percentage(
+                    result["confidence"]
+                ),
+            )
+
+            st.subheader("Class Probabilities")
+
+            legitimate_probability = result[
+                "legitimate_probability"
+            ]
+
+            phishing_probability = result[
+                "phishing_probability"
+            ]
+
+            probability_table = pd.DataFrame(
+                {
+                    "Class": [
+                        "Legitimate",
+                        "Phishing",
+                    ],
+                    "Probability": [
+                        format_percentage(
+                            legitimate_probability
+                        ),
+                        format_percentage(
+                            phishing_probability
+                        ),
+                    ],
+                }
+            )
+
+            st.dataframe(
+                probability_table,
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            st.progress(
+                phishing_probability,
+                text=(
+                    "Phishing probability: "
+                    f"{phishing_probability:.2%}"
+                ),
+            )
+
+            if "model_input" in result:
+                with st.expander(
+                    "View engineered input sent to the model"
+                ):
+                    st.dataframe(
+                        result["model_input"],
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+        except FileNotFoundError as error:
+            st.error(
+                "A required model file could not be found."
+            )
+            st.exception(error)
+
+        except Exception as error:
+            st.error(
+                f"{selected_model} could not complete "
+                "the prediction."
+            )
+            st.exception(error)
+
+
+# ==================================================
+# Leaderboard
+# ==================================================
+
+st.divider()
+st.subheader("Model Leaderboard")
+
+leaderboard = create_leaderboard()
+
+st.dataframe(
+    leaderboard,
+    hide_index=True,
+    use_container_width=True,
+)
+
+winner = leaderboard.iloc[0]
+
+st.success(
+    f"🏆 Overall Winner: {winner['Model']}"
+)
+
+st.write(
+    f"{winner['Model']} ranked first with an accuracy of "
+    f"{winner['Accuracy']} and an F1 score of "
+    f"{winner['F1 Score']}."
+)
+
+st.caption(
+    "The leaderboard is ranked using the final model evaluation results."
+)
